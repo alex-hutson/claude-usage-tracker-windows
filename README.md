@@ -105,3 +105,54 @@ The [macOS Claude Usage Tracker](https://github.com/hamed-elfayome/Claude-Usage-
 ## Licence
 
 MIT
+
+## Updating your session key
+
+Session keys expire when you log out of claude.ai or after a period of inactivity. When the icon shows an error or stops updating, you need to rotate the key.
+
+The most reliable way is via PowerShell:
+
+```powershell
+$cfg = Get-Content "$env:USERPROFILE\.claude_usage_tracker.json" | ConvertFrom-Json
+$cfg.session_key = "YOUR_NEW_KEY_HERE"
+$cfg | ConvertTo-Json | Set-Content "$env:USERPROFILE\.claude_usage_tracker.json"
+```
+
+Then restart the app:
+
+```powershell
+Get-Process pythonw | Stop-Process
+Start-Process -FilePath "C:\Users\<you>\AppData\Local\Programs\Python\Python314\pythonw.exe" -ArgumentList "`"<full path to claude_tray.py>`""
+```
+
+To get a new session key, log out and back in to claude.ai, then follow the cookie steps above.
+
+## Troubleshooting
+
+**Icon appears twice after Windows login**
+
+You may have two startup entries — one `.lnk` shortcut and one `.bat` file. Check with:
+
+```powershell
+dir "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup"
+```
+
+If you see both `Claude Usage Tracker.lnk` and `claude_usage_tracker.bat`, delete the `.bat`:
+
+```powershell
+del "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup\claude_usage_tracker.bat"
+```
+
+**Icon doesn't appear at all**
+
+Make sure you are using Python from [python.org](https://python.org) and not the Windows Store version. Check with:
+
+```powershell
+python -c "import sys; print(sys.executable)"
+```
+
+The path should contain `Programs\Python` not `WindowsApps`. If it shows `WindowsApps`, uninstall the Store version and reinstall from python.org with "Add Python to environment variables" ticked.
+
+**Avast flags a file as IDP.Generic**
+
+This is a false positive on batch files that launch Python scripts. Add the `claude_usage_tracker` folder to your Avast exclusions list, or simply run the app directly via PowerShell rather than using a `.bat` launcher.
