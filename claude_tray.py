@@ -254,59 +254,77 @@ class Tracker:
 
     def _on_set_key(self, icon, item):
         import tkinter as tk
-        from tkinter import simpledialog, messagebox
+        from tkinter import messagebox
 
         root = tk.Tk()
-        root.withdraw()
+        root.title("Claude Usage Tracker")
+        root.resizable(False, False)
         root.attributes("-topmost", True)
 
-        key = simpledialog.askstring(
-            "Claude Usage Tracker",
+        tk.Label(root, text=(
             "Paste your sessionKey cookie from claude.ai\n\n"
             "How to get it:\n"
             "  1. Open https://claude.ai in Chrome or Edge\n"
-            "  2. Press F12  ->  Application tab  ->  Cookies\n"
+            "  2. Press F12 -> Application tab -> Cookies\n"
             "  3. Click https://claude.ai in the left panel\n"
             "  4. Find the row called  sessionKey\n"
-            "  5. Double-click its Value cell and copy the full text\n"
-            "     (starts with  sk-ant-sid01-...)\n",
-            initialvalue=self.cfg.get("session_key", ""),
-            parent=root,
-        )
+            "  5. Double-click its Value and copy the full text\n"
+            "     (starts with  sk-ant-sid01-...)"
+        ), justify="left", padx=12, pady=8).pack()
 
-        if not key or not key.strip():
+        entry_var = tk.StringVar()
+        entry = tk.Entry(root, textvariable=entry_var, width=60, show="")
+        entry.pack(padx=12, pady=4)
+        entry.focus_set()
+
+        def do_paste(event=None):
+            try:
+                entry.delete(0, tk.END)
+                entry.insert(0, root.clipboard_get())
+            except Exception:
+                pass
+        entry.bind("<Control-v>", do_paste)
+        entry.bind("<Control-V>", do_paste)
+        entry.bind("<Shift-Insert>", do_paste)
+
+        def on_ok(event=None):
+            key = entry_var.get().strip()
+            if not key:
+                root.destroy()
+                return
+            try:
+                orgs = api_get_orgs(key)
+            except Exception as e:
+                messagebox.showerror("Claude Usage Tracker", f"Could not connect:\n\n{e}", parent=root)
+                return
+            if not orgs:
+                messagebox.showerror("Claude Usage Tracker", "No organisations found. Check your session key.", parent=root)
+                return
+            self.cfg["session_key"] = key
+            self.cfg["org_id"]      = orgs[0]["uuid"]
+            save_config(self.cfg)
+            self._refresh()
+            self._update()
+            org_name = orgs[0].get("name", orgs[0]["uuid"][:12] + "...")
+            messagebox.showinfo("Claude Usage Tracker",
+                                f"Connected to: {org_name}\n\n"
+                                f"Session: {self.session_pct:.1f}%\n"
+                                f"Weekly:  {self.weekly_pct:.1f}%\n"
+                                f"Resets:  {self.reset_time}", parent=root)
             root.destroy()
-            return
 
-        key = key.strip()
-        try:
-            orgs = api_get_orgs(key)
-        except Exception as e:
-            messagebox.showerror("Claude Usage Tracker",
-                                 f"Could not connect:\n\n{e}")
+        def on_cancel():
             root.destroy()
-            return
 
-        if not orgs:
-            messagebox.showerror("Claude Usage Tracker",
-                                 "No organisations found. Check your session key.")
-            root.destroy()
-            return
+        btn_frame = tk.Frame(root)
+        btn_frame.pack(pady=8)
+        tk.Button(btn_frame, text="OK",     width=10, command=on_ok).pack(side="left",  padx=4)
+        tk.Button(btn_frame, text="Cancel", width=10, command=on_cancel).pack(side="left", padx=4)
+        root.bind("<Return>", on_ok)
+        root.bind("<Escape>", lambda e: on_cancel())
 
-        self.cfg["session_key"] = key
-        self.cfg["org_id"]      = orgs[0]["uuid"]
-        save_config(self.cfg)
+        root.mainloop()
 
-        self._refresh()
-        self._update()
-
-        org_name = orgs[0].get("name", orgs[0]["uuid"][:12] + "...")
-        messagebox.showinfo("Claude Usage Tracker",
-                            f"Connected to: {org_name}\n\n"
-                            f"Session: {self.session_pct:.1f}%\n"
-                            f"Weekly:  {self.weekly_pct:.1f}%\n"
-                            f"Resets:  {self.reset_time}")
-        root.destroy()
 
     def _on_startup(self, icon, item):
         _rem_startup() if _in_startup() else _add_startup()
