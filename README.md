@@ -156,3 +156,17 @@ The path should contain `Programs\Python` not `WindowsApps`. If it shows `Window
 **Avast flags a file as IDP.Generic**
 
 This is a false positive on batch files that launch Python scripts. Add the `claude_usage_tracker` folder to your Avast exclusions list, or simply run the app directly via PowerShell rather than using a `.bat` launcher.
+
+## Creating a desktop shortcut
+
+To create a desktop shortcut for manually launching the app, run this in PowerShell:
+
+```powershell
+$shell = New-Object -ComObject WScript.Shell
+$shortcut = $shell.CreateShortcut("$env:USERPROFILE\Desktop\Claude Usage Tracker.lnk")
+$shortcut.TargetPath = "C:\Users\<you>\AppData\Local\Programs\Python\Python314\pythonw.exe"
+$shortcut.Arguments = '"<full path to claude_tray.py>"'
+$shortcut.WorkingDirectory = "<folder containing claude_tray.py>"
+$shortcut.Description = "Claude Usage Tracker"
+$shortcut.Save()
+```
