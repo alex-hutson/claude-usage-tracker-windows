@@ -9,6 +9,11 @@ build/
 
 # Config (contains your session key — never commit this)
 .claude_usage_tracker.json
+.claude_usage_tracker-*.json
+
+# Local backups
+*.bak-*
+shortcut-backups-*/
 
 # Virtual environments
 .venv/

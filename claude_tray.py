@@ -15,17 +15,81 @@ Hover over the icon for a full summary including reset time.
 Requirements:  pip install pystray pillow requests
 Run silently:  pythonw claude_tray.py
 Run with log:  python  claude_tray.py
+
+Several accounts or organisations
+---------------------------------
+Run one copy per account, each with its own profile:
+
+    pythonw claude_tray.py --profile personal --label "Personal"
+    pythonw claude_tray.py --profile work     --label "Work"
+
+Each profile keeps its own session key and organisation, gets its own
+tray icon with a coloured border, and its own Start with Windows entry.
+With no --profile, the original single-account settings file is used.
 """
 
-import os, sys, json, time, threading, webbrowser
+import os, re, sys, json, time, argparse, threading, webbrowser
 import requests
 from PIL import Image, ImageDraw
 import pystray
 from pystray import MenuItem as Item, Menu
 
 # ---------------------------------------------------------------------------
-CONFIG_PATH  = os.path.join(os.path.expanduser("~"), ".claude_usage_tracker.json")
 REFRESH_SECS = 60
+
+# Border colours handed out to named profiles, in order of a stable hash.
+ACCENTS = {
+    "blue":   (59, 130, 246),
+    "purple": (168, 85, 247),
+    "teal":   (20, 184, 166),
+    "pink":   (236, 72, 153),
+    "white":  (230, 230, 240),
+}
+
+
+def _safe_profile(name):
+    return re.sub(r"[^A-Za-z0-9_-]", "", name or "")[:32]
+
+
+def config_path(profile):
+    home = os.path.expanduser("~")
+    if not profile:
+        return os.path.join(home, ".claude_usage_tracker.json")
+    return os.path.join(home, f".claude_usage_tracker-{profile}.json")
+
+
+def parse_args(argv=None):
+    p = argparse.ArgumentParser(description="Claude usage in the Windows system tray")
+    p.add_argument("--profile", default="",
+                   help="Name for this account (letters, numbers, - and _). "
+                        "Each profile keeps its own key and organisation.")
+    p.add_argument("--label", default="",
+                   help="Name shown in the tooltip and menu, e.g. \"Personal\"")
+    p.add_argument("--accent", default="",
+                   help="Icon border colour: " + ", ".join(ACCENTS) + ", none, or a hex value like #3b82f6")
+    a = p.parse_args(argv)
+    a.profile = _safe_profile(a.profile)
+    return a
+
+
+def resolve_accent(value, profile):
+    v = (value or "").strip().lower()
+    if v == "none":
+        return None
+    if v in ACCENTS:
+        return ACCENTS[v]
+    if re.fullmatch(r"#?[0-9a-f]{6}", v):
+        v = v.lstrip("#")
+        return tuple(int(v[i:i+2], 16) for i in (0, 2, 4))
+    if not profile:
+        return None          # original single-account look
+    names = list(ACCENTS)
+    return ACCENTS[names[sum(map(ord, profile)) % len(names)]]
+
+
+ARGS        = parse_args() if __name__ == "__main__" else parse_args([])
+PROFILE     = ARGS.profile
+CONFIG_PATH = config_path(PROFILE)
 TOOLTIP_MAX  = 127   # Windows tray tooltip limit
 
 API_HEADERS = {
@@ -91,32 +155,37 @@ def _col(pct):
     return (220, 38, 38)
 
 
-def make_icon(session_pct=0, weekly_pct=0, error=False):
+def make_icon(session_pct=0, weekly_pct=0, error=False, accent=None):
     W = H = 64
     img = Image.new("RGBA", (W, H), (0, 0, 0, 0))
     d   = ImageDraw.Draw(img)
 
-    # Dark card background
-    d.rounded_rectangle([0, 0, W-1, H-1], radius=10, fill=(28, 28, 36, 245))
+    # Dark card background, with a coloured border when a profile has one
+    if accent:
+        d.rounded_rectangle([0, 0, W-1, H-1], radius=10, fill=(*accent, 255))
+        d.rounded_rectangle([5, 5, W-6, H-6], radius=6, fill=(28, 28, 36, 255))
+    else:
+        d.rounded_rectangle([0, 0, W-1, H-1], radius=10, fill=(28, 28, 36, 245))
 
     if error:
         d.ellipse([22, 10, 42, 30], fill=(220, 38, 38))
         d.text((32, 20), "!", fill="white", anchor="mm")
         return img
 
-    bx0, bx1  = 6, W - 6
+    pad       = 9 if accent else 6
+    bx0, bx1  = pad, W - pad
     bw        = bx1 - bx0
     track     = (55, 55, 68)
 
     # Session bar (top)
-    sy0, sy1 = 8, 26
+    sy0, sy1 = (10, 27) if accent else (8, 26)
     d.rounded_rectangle([bx0, sy0, bx1, sy1], radius=4, fill=track)
     fw = max(4, int(bw * min(session_pct, 100) / 100))
     d.rounded_rectangle([bx0, sy0, bx0+fw, sy1], radius=4, fill=_col(session_pct))
     d.text((bx0+3, sy0+1), "S", fill=(200, 200, 215), anchor="lt")
 
     # Weekly bar (bottom)
-    wy0, wy1 = 36, 54
+    wy0, wy1 = (36, 53) if accent else (36, 54)
     d.rounded_rectangle([bx0, wy0, bx1, wy1], radius=4, fill=track)
     fw2 = max(4, int(bw * min(weekly_pct, 100) / 100))
     d.rounded_rectangle([bx0, wy0, bx0+fw2, wy1], radius=4, fill=_col(weekly_pct))
@@ -130,10 +199,10 @@ def make_icon(session_pct=0, weekly_pct=0, error=False):
 # ---------------------------------------------------------------------------
 
 def _startup_bat():
+    name = f"claude_usage_tracker-{PROFILE}.bat" if PROFILE else "claude_usage_tracker.bat"
     return os.path.join(
         os.environ.get("APPDATA", ""),
-        "Microsoft", "Windows", "Start Menu", "Programs", "Startup",
-        "claude_usage_tracker.bat"
+        "Microsoft", "Windows", "Start Menu", "Programs", "Startup", name
     )
 
 def _in_startup():
@@ -141,8 +210,18 @@ def _in_startup():
 
 def _add_startup():
     script = os.path.abspath(__file__)
+    exe    = sys.executable or "pythonw"
+    if exe.lower().endswith("python.exe"):
+        exe = exe[:-len("python.exe")] + "pythonw.exe"
+    args = ""
+    if PROFILE:
+        args += f' --profile "{PROFILE}"'
+    if ARGS.label:
+        args += f' --label "{ARGS.label}"'
+    if ARGS.accent:
+        args += f' --accent "{ARGS.accent}"'
     with open(_startup_bat(), "w") as f:
-        f.write(f'@echo off\nstart "" /B pythonw "{script}"\n')
+        f.write(f'@echo off\nstart "" /B "{exe}" "{script}"{args}\n')
 
 def _rem_startup():
     p = _startup_bat()
@@ -157,11 +236,16 @@ def _rem_startup():
 class Tracker:
 
     def __init__(self):
-        self.cfg   = load_config()
-        self.data  = None
-        self.err   = None
-        self._lk   = threading.Lock()
-        self.icon  = None
+        self.cfg    = load_config()
+        self.data   = None
+        self.err    = None
+        self._lk    = threading.Lock()
+        self.icon   = None
+        self.accent = resolve_accent(ARGS.accent, PROFILE)
+
+    @property
+    def label(self):
+        return ARGS.label or self.cfg.get("org_name") or PROFILE or "Claude"
 
     # --- Data properties ---
 
@@ -206,7 +290,8 @@ class Tracker:
                 self.data = data
                 self.err  = None
         except requests.HTTPError as e:
-            code = e.response.status_code if e.response else "?"
+            # A 4xx Response is falsy, so test against None explicitly
+            code = e.response.status_code if e.response is not None else "?"
             self.err = ("Session expired -- update key" if code == 401 else f"HTTP {code}")
         except Exception as e:
             self.err = str(e)[:80]
@@ -222,10 +307,12 @@ class Tracker:
     def _update(self):
         if not self.icon:
             return
-        self.icon.icon  = make_icon(self.session_pct, self.weekly_pct, error=bool(self.err))
+        self.icon.icon  = make_icon(self.session_pct, self.weekly_pct,
+                                    error=bool(self.err), accent=self.accent)
+        name = self.label[:30]
         tooltip = (
-            f"Claude Usage  [!]  {self.err}" if self.err else
-            f"Claude  |  Session: {self.session_pct:.0f}%  |  Weekly: {self.weekly_pct:.0f}%  |  Resets: {self.reset_time}"
+            f"{name}  [!]  {self.err}" if self.err else
+            f"{name}  |  Session: {self.session_pct:.0f}%  |  Weekly: {self.weekly_pct:.0f}%  |  Resets: {self.reset_time}"
         )
         self.icon.title = tooltip[:TOOLTIP_MAX]
 
@@ -257,7 +344,7 @@ class Tracker:
         from tkinter import messagebox
 
         root = tk.Tk()
-        root.title("Claude Usage Tracker")
+        root.title(f"Claude Usage Tracker - {self.label}" if PROFILE or ARGS.label else "Claude Usage Tracker")
         root.resizable(False, False)
         root.attributes("-topmost", True)
 
@@ -287,7 +374,41 @@ class Tracker:
         entry.bind("<Control-V>", do_paste)
         entry.bind("<Shift-Insert>", do_paste)
 
+        # Shown only when the key belongs to more than one organisation
+        state    = {"orgs": None, "key": None}
+        org_box  = tk.Frame(root)
+        tk.Label(org_box, justify="left", text=(
+            "This login has more than one organisation.\n"
+            "Pick the one this icon should track, then press OK."
+        )).pack(anchor="w")
+        org_list = tk.Listbox(org_box, height=5, width=60, exportselection=False)
+        org_list.pack(pady=4)
+
+        def _org_label(o):
+            return o.get("name") or (o["uuid"][:12] + "...")
+
+        def save_and_close(key, org):
+            self.cfg["session_key"] = key
+            self.cfg["org_id"]      = org["uuid"]
+            self.cfg["org_name"]    = _org_label(org)
+            save_config(self.cfg)
+            self._refresh()
+            self._update()
+            messagebox.showinfo("Claude Usage Tracker",
+                                f"Connected to: {_org_label(org)}\n\n"
+                                f"Session: {self.session_pct:.1f}%\n"
+                                f"Weekly:  {self.weekly_pct:.1f}%\n"
+                                f"Resets:  {self.reset_time}", parent=root)
+            root.destroy()
+
         def on_ok(event=None):
+            if state["orgs"]:
+                sel = org_list.curselection()
+                if not sel:
+                    messagebox.showerror("Claude Usage Tracker", "Pick an organisation first.", parent=root)
+                    return
+                save_and_close(state["key"], state["orgs"][sel[0]])
+                return
             key = entry_var.get().strip()
             if not key:
                 root.destroy()
@@ -300,18 +421,17 @@ class Tracker:
             if not orgs:
                 messagebox.showerror("Claude Usage Tracker", "No organisations found. Check your session key.", parent=root)
                 return
-            self.cfg["session_key"] = key
-            self.cfg["org_id"]      = orgs[0]["uuid"]
-            save_config(self.cfg)
-            self._refresh()
-            self._update()
-            org_name = orgs[0].get("name", orgs[0]["uuid"][:12] + "...")
-            messagebox.showinfo("Claude Usage Tracker",
-                                f"Connected to: {org_name}\n\n"
-                                f"Session: {self.session_pct:.1f}%\n"
-                                f"Weekly:  {self.weekly_pct:.1f}%\n"
-                                f"Resets:  {self.reset_time}", parent=root)
-            root.destroy()
+            if len(orgs) == 1:
+                save_and_close(key, orgs[0])
+                return
+            state["orgs"], state["key"] = orgs, key
+            current = self.cfg.get("org_id")
+            for i, o in enumerate(orgs):
+                org_list.insert(tk.END, _org_label(o))
+                if o["uuid"] == current:
+                    org_list.selection_set(i)
+            entry.config(state="disabled")
+            org_box.pack(padx=12, pady=4, before=btn_frame)
 
         def on_cancel():
             root.destroy()
@@ -339,7 +459,7 @@ class Tracker:
 
     def _menu(self):
         return Menu(
-            Item("Claude Usage Tracker", None, enabled=False),
+            Item(lambda item: f"Claude Usage  -  {self.label}", None, enabled=False),
             Menu.SEPARATOR,
             Item(self._lbl_session, None, enabled=False),
             Item(self._lbl_weekly,  None, enabled=False),
@@ -360,17 +480,20 @@ class Tracker:
         threading.Thread(target=self._loop, daemon=True).start()
 
         self.icon = pystray.Icon(
-            name  = "claude_usage",
-            icon  = make_icon(),
-            title = "Claude Usage Tracker -- loading...",
+            name  = f"claude_usage_{PROFILE}" if PROFILE else "claude_usage",
+            icon  = make_icon(accent=self.accent),
+            title = f"{self.label} -- loading...",
             menu  = self._menu(),
         )
 
         if not self.cfg.get("session_key"):
             # Prompt on first run
-            self.icon.run(setup=lambda ic: threading.Thread(
-                target=self._on_set_key, args=(ic, None), daemon=True
-            ).start())
+            # A custom setup replaces pystray's default, which is what makes
+            # the icon visible, so show it here before opening the key window.
+            def _first_run(ic):
+                ic.visible = True
+                threading.Thread(target=self._on_set_key, args=(ic, None), daemon=True).start()
+            self.icon.run(setup=_first_run)
         else:
             self.icon.run()
 

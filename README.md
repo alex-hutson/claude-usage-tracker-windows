@@ -27,7 +27,7 @@ Right-click the icon for a menu with:
 
 - Windows 10 or 11
 - **Python from [python.org](https://python.org)** (not the Windows Store version — the Store version blocks system tray access)
-- A Claude Pro or Max subscription
+- A paid Claude plan: Pro, Max, Team or Enterprise
 
 ## Installation
 
@@ -53,7 +53,7 @@ Start-Process -FilePath "C:\Users\<you>\AppData\Local\Programs\Python\Python314\
 
 Replace `<you>` with your Windows username and `<full path to claude_tray.py>` with the actual path to the script.
 
-On first run, a dialog will prompt you for your session key.
+On first run, a dialog will prompt you for your session key. If your login belongs to more than one organisation (for example a personal one and a work Team or Enterprise one), it then asks which organisation to track. Pick the one whose usage you want to see.
 
 ## Getting your session key
 
@@ -65,6 +65,19 @@ On first run, a dialog will prompt you for your session key.
 Your session key is stored locally at `~/.claude_usage_tracker.json`. It is never sent anywhere except to `claude.ai` directly.
 
 > **Security note:** Treat your session key like a password. Do not share it or commit it to version control.
+
+## Several accounts or organisations
+
+Run one copy per account or organisation, each with its own profile, label and tray icon:
+
+```powershell
+pythonw claude_tray.py --profile personal --label "Personal"
+pythonw claude_tray.py --profile work --label "Work"
+```
+
+Each profile keeps its own settings file (`~/.claude_usage_tracker-<profile>.json`), session key and organisation, gets a coloured border so you can tell the icons apart, and has its own Start with Windows entry. With no `--profile`, the original single-account settings file is used.
+
+If one login belongs to both organisations, both profiles use the same session key, so when it expires, update it in each profile (right-click each icon, then Set Session Key).
 
 ## Auto-start with Windows
 
